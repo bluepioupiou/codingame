@@ -14,6 +14,7 @@ HOLE = 1
 RADAR = 2
 TRAP = 3
 AMADEUSIUM = 4
+# Add more radars for late game if no more ore to dig
 PLACES_FOR_RADARS = [[7, 7], [11, 3], [11, 11], [15, 7], [19, 3], [19, 11], [3, 3], [3, 11], [23, 7], [27, 3], [27, 11]]
 MIN_TO_DIG_TO_SET_TRAPS = 5
 
@@ -88,6 +89,7 @@ class Grid:
     def __init__(self):
         self.cells = []
         self.places_for_radar = []
+        self.holes = []
         for y in range(height):
             for x in range(width):
                 self.cells.append(Cell(x, y, 0, 0))
@@ -139,6 +141,7 @@ class Game:
         self.enemy_robots = []
         self.to_dig = []
         self.grid.init_radars()
+        self.grid.holes = []
 
 
 game = Game()
@@ -156,6 +159,8 @@ while True:
             amadeusium = inputs[2 * j]
             hole = int(inputs[2 * j + 1])
             cell = game.grid.get_cell(j, i)
+            if hole == HOLE:
+                game.grid.holes.append(cell)
             cell.update(amadeusium, hole)
             if amadeusium != '?' and int(amadeusium) > 0:
                 game.to_dig.append(cell)
@@ -193,7 +198,7 @@ while True:
     someone_has_a_radar = False
     someone_has_a_trap = False
 
-    # Find if some enemy robot do something suspicious
+    # Find if some enemy robot do something suspicious // TODO debug
     for robot in game.enemy_robots:
         if robot.id in game.previous_turn_enemies:
             previous = game.previous_turn_enemies[robot.id]
@@ -205,9 +210,13 @@ while True:
                 else:
                     # Robot potentially release a trap somewhere
                     if robot.id in game.suspicious_enemies:
-                        # For now add all available cells TODO : compare to new holes
+                        # Match for all accessible holes and mark them
                         for diff in [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]]:
-                            game.suspicious_pos.append(Pos(robot.x + diff[0], robot.y + diff[1]))
+                            new_x = robot.x + diff[0]
+                            new_y = robot.y + diff[1]
+                            cell_to_check = game.grid.get_cell(new_x, new_y)
+                            if cell_to_check.has_hole():
+                                game.suspicious_pos.append(cell_to_check)
                         del game.suspicious_enemies[robot.id]
 
         game.previous_turn_enemies[robot.id] = robot
@@ -283,6 +292,8 @@ while True:
                 del game.to_dig[to_delete]
                 robot.dig(best_cell)
             elif someone_has_a_radar:
+                # TODO find a better thing to do
                 robot.move(next_radar)
             else:
+                # TODO find a better thing to do
                 robot.wait(f"Nothing better to do")
