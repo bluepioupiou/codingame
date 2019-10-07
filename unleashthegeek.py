@@ -123,6 +123,9 @@ class Game:
         self.my_robots = []
         self.enemy_robots = []
         self.to_dig = []
+        self.suspicious_enemies = {}
+        self.previous_turn_enemies = {}
+        self.suspicious_pos = []
 
     def reset(self):
         self.radars = []
@@ -158,7 +161,7 @@ while True:
     for i in range(entity_count):
         # id: unique id of the entity
         # type: 0 for your robot, 1 for other robot, 2 for radar, 3 for trap
-        # y: position of the entity
+        # x,y: position of the entity
         # item: if this entity is a robot, the item it is carrying (-1 for NONE, 2 for RADAR, 3 for TRAP, 4 for AMADEUSIUM)
         id, type, x, y, item = [int(j) for j in input().split()]
 
@@ -179,6 +182,43 @@ while True:
     next_radar = game.grid.get_best_place_for_radar()
     someone_has_a_radar = False
 
+    # Find if some enemy robot do something suspicious
+    for robot in game.enemy_robots:
+        if robot.id in game.previous_turn_enemies:
+            previous = game.previous_turn_enemies[robot.id]
+            # Robot didn't move
+            if robot.distance(previous) == 0:
+                # Robot is on QG : it may have a radar or a trap
+                if robot.x == 0:
+                    game.suspicious_enemies[robot.id] = robot
+                else:
+                    # Robot potentially release a trap somewhere
+                    if robot.id in game.suspicious_enemies:
+                        # For now add all available cells TODO : compare to new holes
+                        for diff in [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]]:
+                            game.suspicious_pos.append(Pos(robot.x + diff[0], robot.y + diff[1]))
+                        del game.suspicious_enemies[robot.id]
+
+        game.previous_turn_enemies[robot.id] = robot
+
+    enemies_string = ','.join(str(r.id) for i, r in game.suspicious_enemies.items())
+    print(f"{len(game.suspicious_enemies)} suspicious_enemies {enemies_string}", file=sys.stderr)
+    pos_string = ','.join(str(p.x) + ':' + str(p.y) for p in game.suspicious_pos)
+    print(f"{len(game.suspicious_pos)} suspicious_pos ", file=sys.stderr)
+
+    # Remove suspicious position from the to_dig list
+    clean_to_dig = []
+    for i, pos in enumerate(game.to_dig):
+        for suspicious in game.suspicious_pos:
+            if pos.distance(suspicious) == 0:
+                break
+        else:
+            clean_to_dig.append(pos)
+    previous_to_dig_count = len(game.to_dig)
+    game.to_dig = clean_to_dig
+    print(f"{previous_to_dig_count - len(game.to_dig)} to dig cleaned", file=sys.stderr)
+
+    # Loop my robot to find priorities first
     for robot in game.my_robots:
         # Do we need a radar
         if len(game.grid.places_for_radar) and not game.radar_cooldown:
