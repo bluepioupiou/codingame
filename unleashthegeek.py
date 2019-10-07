@@ -1,5 +1,6 @@
 import sys
 import math
+from random import *
 
 # Deliver more amadeusium to hq (left side of the map) than your opponent. Use radars to find amadeusium but beware of traps!
 
@@ -13,7 +14,8 @@ HOLE = 1
 RADAR = 2
 TRAP = 3
 AMADEUSIUM = 4
-PLACES_FOR_RADARS = [[3, 3], [3, 11], [7, 7], [11, 3], [11, 11], [15, 7], [19, 3], [19, 11], [23, 7], [27, 3], [27, 11]]
+PLACES_FOR_RADARS = [[7, 7], [11, 3], [11, 11], [15, 7], [19, 3], [19, 11], [3, 3], [3, 11], [23, 7], [27, 3], [27, 11]]
+MIN_TO_DIG_TO_SET_TRAPS = 5
 
 
 class Pos:
@@ -89,7 +91,10 @@ class Grid:
         for y in range(height):
             for x in range(width):
                 self.cells.append(Cell(x, y, 0, 0))
+        self.init_radars()
 
+    def init_radars(self):
+        self.places_for_radar = []
         for pos in PLACES_FOR_RADARS:
             self.places_for_radar.append(Pos(pos[0], pos[1]))
 
@@ -133,6 +138,7 @@ class Game:
         self.my_robots = []
         self.enemy_robots = []
         self.to_dig = []
+        self.grid.init_radars()
 
 
 game = Game()
@@ -171,6 +177,7 @@ while True:
             game.enemy_robots.append(Robot(x, y, type, id, item))
         elif type == TRAP:
             game.traps.append(Entity(x, y, type, id))
+            game.suspicious_pos.append(Pos(x, y))
         elif type == RADAR:
             game.radars.append(Entity(x, y, type, id))
             game.grid.update_radars(Pos(x, y))
@@ -178,9 +185,13 @@ while True:
     print(f"{len(game.to_dig)} to dig", file=sys.stderr)
     radar_requested = False
     best_candidate_for_radar = None
-    min_distance = 50
+    best_candidate_for_trap = None
+    min_distance_for_radar = 50
+    min_distance_for_trap = 50
     next_radar = game.grid.get_best_place_for_radar()
+    cell_to_trap = None
     someone_has_a_radar = False
+    someone_has_a_trap = False
 
     # Find if some enemy robot do something suspicious
     for robot in game.enemy_robots:
@@ -218,6 +229,15 @@ while True:
     game.to_dig = clean_to_dig
     print(f"{previous_to_dig_count - len(game.to_dig)} to dig cleaned", file=sys.stderr)
 
+    # Find a place to set trap efficiently
+    if len(game.to_dig) > MIN_TO_DIG_TO_SET_TRAPS:
+        for robot in game.my_robots:
+            if robot.item in [-1, 4]:
+                distance = Pos(0, robot.y).distance(robot)
+                if not best_candidate_for_trap or distance < min_distance_for_trap:
+                    best_candidate_for_trap = robot
+                    min_distance_for_trap = distance
+
     # Loop my robot to find priorities first
     for robot in game.my_robots:
         # Do we need a radar
@@ -225,12 +245,15 @@ while True:
             # Find the best candidate to pick the radar (closest to base)
             if robot.item in [-1, 4]:
                 distance = robot.x + Pos(0, robot.y).distance(next_radar)
-                if not best_candidate_for_radar or distance < min_distance:
+                if not best_candidate_for_radar or distance < min_distance_for_radar:
                     best_candidate_for_radar = robot
-                    min_distance = distance
+                    min_distance_for_radar = distance
         # Has someone already a radar
         if robot.item == 2:
             someone_has_a_radar = True
+        # Has someone already a trap
+        if robot.item == 3:
+            someone_has_a_trap = True
 
     for robot in game.my_robots:
         # Write an action using print
@@ -238,24 +261,24 @@ while True:
         # WAIT|
         # MOVE x y|REQUEST item
         # The robot had a target before and didn't reached it yet
-
-        if best_candidate_for_radar and robot == best_candidate_for_radar:
+        if robot == best_candidate_for_radar and not someone_has_a_radar:
             robot.request(RADAR)
+        elif robot == best_candidate_for_trap and not someone_has_a_trap:
+            robot.request(TRAP)
         elif robot.item == 4:
             robot.go_back_to_base()
         elif robot.item == 2 and next_radar:
-            best_place = next_radar
-            robot.dig(best_place, "PLACING RADAR")
+            robot.dig(next_radar, "PLACING RADAR")
         else:
-            if game.to_dig:
-                min_distance = 50
+            if len(game.to_dig):
+                min_distance_for_radar = 50
                 best_cell = game.to_dig[0]
                 to_delete = 0
                 for i, cell in enumerate(game.to_dig):
                     distance = robot.distance(cell) + cell.x
-                    if distance < min_distance:
+                    if distance < min_distance_for_radar:
                         best_cell = cell
-                        min_distance = distance
+                        min_distance_for_radar = distance
                         to_delete = i
                 del game.to_dig[to_delete]
                 robot.dig(best_cell)
