@@ -15,7 +15,6 @@ TRAP = 3
 AMADEUSIUM = 4
 PLACES_FOR_RADARS = [[3, 3], [3, 11], [7, 7], [11, 3], [11, 11], [15, 7], [19, 3], [19, 11], [23, 7], [27, 3], [27, 11]]
 
-robots_targets = {}
 
 class Pos:
     def __init__(self, x, y):
@@ -47,7 +46,6 @@ class Robot(Entity):
 
     def move(self, pos, message=""):
         self.action = f"MOVE {pos.x} {pos.y} {message} ({self.id})"
-        robots_targets[self.id] = (pos, self.action)
         print(self.action)
 
     def wait(self, message=""):
@@ -55,7 +53,6 @@ class Robot(Entity):
 
     def dig(self, pos, message=""):
         self.action = f"DIG {pos.x} {pos.y} {message} ({self.id})"
-        robots_targets[self.id] = (pos, self.action)
         print(self.action)
 
     def request(self, requested_item, message=""):
@@ -65,11 +62,11 @@ class Robot(Entity):
             self.action = f"REQUEST TRAP {message} ({self.id})"
         else:
             raise Exception(f"Unknown item {requested_item}")
-        robots_targets[self.id] = (Pos(0, self.y), self.action)
         print(self.action)
 
     def __str__(self):
         return f"{self.id}: carry {self.item}"
+
 
 class Cell(Pos):
     def __init__(self, x, y, amadeusium, hole):
@@ -88,19 +85,28 @@ class Cell(Pos):
 class Grid:
     def __init__(self):
         self.cells = []
+        self.places_for_radar = []
         for y in range(height):
             for x in range(width):
                 self.cells.append(Cell(x, y, 0, 0))
+
+        for pos in PLACES_FOR_RADARS:
+            self.places_for_radar.append(Pos(pos[0], pos[1]))
 
     def get_cell(self, x, y):
         if width > x >= 0 and height > y >= 0:
             return self.cells[x + width * y]
         return None
 
+    def update_radars(self, radar):
+        for i, o in enumerate(self.places_for_radar):
+            if o.x == radar.x and o.y == radar.y:
+                del self.places_for_radar[i]
+                break
+
     def get_best_place_for_radar(self):
-        if len(PLACES_FOR_RADARS):
-            place = PLACES_FOR_RADARS.pop(0)
-            return Pos(place[0], place[1])
+        if len(self.places_for_radar):
+            return self.places_for_radar[0]
         else:
             return None
 
@@ -164,53 +170,56 @@ while True:
             game.traps.append(Entity(x, y, type, id))
         elif type == RADAR:
             game.radars.append(Entity(x, y, type, id))
+            game.grid.update_radars(Pos(x, y))
 
     print(f"{len(game.to_dig)} to dig", file=sys.stderr)
-    print(f"targets : {robots_targets}", file=sys.stderr)
     radar_requested = False
+    best_candidate_for_radar = None
+    min_distance = 50
+    next_radar = game.grid.get_best_place_for_radar()
+    someone_has_a_radar = False
+
+    for robot in game.my_robots:
+        # Do we need a radar
+        if len(game.grid.places_for_radar) and not game.radar_cooldown:
+            # Find the best candidate to pick the radar (closest to base)
+            if robot.item in [-1, 4]:
+                distance = robot.x + Pos(0, robot.y).distance(next_radar)
+                if not best_candidate_for_radar or distance < min_distance:
+                    best_candidate_for_radar = robot
+                    min_distance = distance
+        # Has someone already a radar
+        if robot.item == 2:
+            someone_has_a_radar = True
+
     for robot in game.my_robots:
         # Write an action using print
         # To debug: print("Debug messages...", file=sys.stderr)
         # WAIT|
         # MOVE x y|REQUEST item
         # The robot had a target before and didn't reached it yet
-        target = None
-        print(f"{robot}", file=sys.stderr)
-                
-        if robot.item == 4:
-            print(f"{robot.id} going back to base", file=sys.stderr)
+
+        if best_candidate_for_radar and robot == best_candidate_for_radar:
+            robot.request(RADAR)
+        elif robot.item == 4:
             robot.go_back_to_base()
-            target = "target"
-        elif robot.id in robots_targets:
-            target, action = robots_targets[robot.id]
-            if robot.distance(target) > 1:
-                print(f"d={robot.distance(target)}, {robot.id} continuing action", file=sys.stderr)
-                print(action)
-            elif "PLACING" in action and robot.item == 2:
-                print(f"{robot.id} one more turn to place radar", file=sys.stderr)
-                print(action)
-            elif "MOVING TO DIG" in action:
-                print(f"{robot.id} one more turn to really dig", file=sys.stderr)
-                robot.dig(target, "DIGGING")
+        elif robot.item == 2 and next_radar:
+            best_place = next_radar
+            robot.dig(best_place, "PLACING RADAR")
+        else:
+            if game.to_dig:
+                min_distance = 50
+                best_cell = game.to_dig[0]
+                to_delete = 0
+                for i, cell in enumerate(game.to_dig):
+                    distance = robot.distance(cell) + cell.x
+                    if distance < min_distance:
+                        best_cell = cell
+                        min_distance = distance
+                        to_delete = i
+                del game.to_dig[to_delete]
+                robot.dig(best_cell)
+            elif someone_has_a_radar:
+                robot.move(next_radar)
             else:
-                print(f"{robot.id} action done, next ! ", file=sys.stderr)
-                target = None
-        # No target or ended and next action 
-        if not target:
-            if robot.item == 2:
-                best_place = game.grid.get_best_place_for_radar()
-                print(f"{robot.id} first time placing radar", file=sys.stderr)
-                robot.dig(best_place, "PLACING RADAR")
-            elif robot.item == -1:
-                if game.radar_cooldown == 0 and not radar_requested and len(PLACES_FOR_RADARS):
-                    print(f"{robot.id} first timerequesting radar", file=sys.stderr)
-                    robot.request(RADAR, "REQUESTING RADAR")
-                    radar_requested = True
-                elif len(game.to_dig):
-                    to_dig = game.to_dig.pop(0)
-                    print(f"{robot.id} first time moving to dig", file=sys.stderr)
-                    robot.move(to_dig, "MOVING TO DIG")
-                else:
-                    robot.wait(f"Nothing better to do")
-            else:
-                    robot.wait(f"Nothing better to do")
+                robot.wait(f"Nothing better to do")
