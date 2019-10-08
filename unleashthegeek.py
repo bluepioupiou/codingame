@@ -35,6 +35,7 @@ class Pos:
     def same(self, pos):
         return self.x == pos.x and self.y == pos.y
 
+
 class Entity(Pos):
     def __init__(self, x, y, type, id):
         super().__init__(x, y)
@@ -137,6 +138,7 @@ class Game:
         self.my_robots = []
         self.enemy_robots = []
         self.to_dig = []
+        self.to_dig_safe = []
         self.suspicious_enemies = {}
         self.previous_turn_enemies = {}
         self.suspicious_pos = []
@@ -153,6 +155,7 @@ class Game:
         self.my_robots = []
         self.enemy_robots = []
         self.to_dig = []
+        self.to_dig_safe = []
         self.grid.init_radars()
         self.grid.holes = []
         self.enemies_trapped = 0
@@ -198,11 +201,6 @@ while True:
                 game.enemies_trapped += 1
         elif type == TRAP:
             game.traps.append(Entity(x, y, type, id))
-            for pos in game.suspicious_pos:
-                if pos.x == x and pos.y == y:
-                    break
-            else:
-                game.suspicious_pos.append(Pos(x, y))
         elif type == RADAR:
             game.radars.append(Entity(x, y, type, id))
             game.grid.update_radars(Pos(x, y))
@@ -212,8 +210,6 @@ while True:
         game.trap_enabled = False
     else:
         game.trap_enabled = False if len(game.traps) > MAX_ACTIVE_TRAPS else True
-
-
 
     radar_requested = False
     best_candidate_for_radar = None
@@ -231,7 +227,7 @@ while True:
         if robot.id in game.previous_turn_enemies:
             previous = game.previous_turn_enemies[robot.id]
             # Robot didn't move
-            if robot.distance(previous) == 0:
+            if robot.same(previous):
                 # Robot is on QG : it may have a radar or a trap
                 if robot.x == 0:
                     game.suspicious_enemies[robot.id] = robot
@@ -249,32 +245,40 @@ while True:
 
         game.previous_turn_enemies[robot.id] = robot
 
-    # Remove suspicious position from the to_dig list
-    clean_to_dig = []
-    for i, pos in enumerate(game.to_dig):
-        for suspicious in game.suspicious_pos:
-            if pos.distance(suspicious) == 0:
+    # Remove my_traps from other dig list
+    new_dig_list = []
+    for pos in game.to_dig:
+        for trap in game.traps:
+            if pos.same(trap):
                 break
         else:
-            clean_to_dig.append(pos)
-    previous_to_dig_count = len(game.to_dig)
-    game.to_dig = clean_to_dig
+            new_dig_list.append(pos)
+    game.to_dig = new_dig_list
+
+    # Remove suspicious positions from the to_dig_safe list
+    for to_dig in game.to_dig:
+        for suspicious in game.suspicious_pos:
+            if to_dig.same(suspicious):
+                break
+        else:
+            game.to_dig_safe.append(to_dig)
 
     # Stop setting radar if enough ore to dig in non suspicious cells
-    for cell in clean_to_dig:
+    for cell in game.to_dig_safe:
         game.total_diggable_amadesium += cell.amadeusium
     if game.total_diggable_amadesium > MAX_ORE_TO_SET_RADARS:
         game.radar_enabled = False
 
     print(f"traps enabled ? {game.trap_enabled} ({len(game.traps)})", file=sys.stderr)
     print(f"radar enabled ? {game.radar_enabled} ({game.total_diggable_amadesium})", file=sys.stderr)
-    print(f"{previous_to_dig_count} to dig", file=sys.stderr)
-    print(f"{previous_to_dig_count - len(game.to_dig)} to dig cleaned", file=sys.stderr)
+    print(f"{len(game.to_dig)} to dig", file=sys.stderr)
+    print(f"{len(game.to_dig_safe)} to dig safe : {','.join(str(p.x) + ':' + str(p.y) for p in game.to_dig_safe)}", file=sys.stderr)
     print(f"{len(game.suspicious_enemies)} suspicious_enemies : {','.join(str(r.id) for i, r in game.suspicious_enemies.items())}", file=sys.stderr)
     print(f"{len(game.suspicious_pos)} suspicious_pos : {','.join(str(p.x) + ':' + str(p.y) for p in game.suspicious_pos)}", file=sys.stderr)
     print(f"{len(game.waiting_robots)} waiting robots : {','.join(str(robot_id) for robot_id in game.waiting_robots)}", file=sys.stderr)
 
-    # Find a place to set trap efficiently
+    # Find if someone can a trap
+    # TODO maybe don't select this candidate if he's near cristal to dig
     if game.trap_enabled and len(game.to_dig) > MIN_TO_DIG_TO_SET_TRAPS:
         for robot in game.my_robots:
             if robot.item in [-1, 4]:
@@ -286,6 +290,7 @@ while True:
     # Loop my robot to find priorities first
     for robot in game.my_robots:
         # Do we need a radar
+        # TODO find the best radar (nearest to existing vein)  to place and not only the next one
         if game.radar_enabled and len(game.grid.places_for_radar) and not game.radar_cooldown:
             # Find the best candidate to pick the radar (closest to base)
             if robot.item in [-1, 4]:
@@ -317,11 +322,15 @@ while True:
             # TODO be carefull of suspicious cells, maybe try just on the side
             robot.dig(next_radar, "PLACING RADAR")
         else:
-            if len(game.to_dig):
+            to_dig = game.to_dig_safe
+            if not to_dig:
+                to_dig = game.to_dig
+                print(f"Passed to non safe digs", file=sys.stderr)
+            if len(to_dig):
                 min_distance_for_radar = 50
-                best_cell = game.to_dig[0]
+                best_cell = to_dig[0]
                 to_delete = 0
-                for i, cell in enumerate(game.to_dig):
+                for i, cell in enumerate(to_dig):
                     if robot.item != 3 or robot.item == 3 and cell.amadeusium > 1:
                         distance = robot.distance(cell) + cell.x
                         if distance < min_distance_for_radar:
@@ -345,7 +354,7 @@ while True:
                     if already_reserved_cell.x == best_cell.x and already_reserved_cell.y == best_cell.y:
                         number_of_reservation += 1
                 if number_of_reservation >= best_cell.amadeusium:
-                    del game.to_dig[to_delete]
+                    del to_dig[to_delete]
                 if waiting_to_lure_enemy:
                     robot.wait("LURE ENEMY")
                 else:
