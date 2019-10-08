@@ -18,6 +18,10 @@ AMADEUSIUM = 4
 PLACES_FOR_RADARS = [[7, 7], [11, 3], [11, 11], [15, 7], [19, 3], [19, 11], [3, 3], [3, 11], [23, 7], [27, 3], [27, 11]]
 MIN_TO_DIG_TO_SET_TRAPS = 5
 MAX_FOLLOWING_RADAR = 2
+STARTING_GUESS_COLUMN = 7
+MAX_ROUND_FOR_TRAPS_IF_NOT_TRAPPED = 150
+MAX_ACTIVE_TRAPS = 5
+MAX_ORE_TO_SET_RADARS = 10
 
 
 class Pos:
@@ -28,6 +32,8 @@ class Pos:
     def distance(self, pos):
         return abs(self.x - pos.x) + abs(self.y - pos.y)
 
+    def same(self, pos):
+        return self.x == pos.x and self.y == pos.y
 
 class Entity(Pos):
     def __init__(self, x, y, type, id):
@@ -46,7 +52,7 @@ class Robot(Entity):
         return self.x == -1 and self.y == -1
 
     def go_back_to_base(self):
-        self.move(Pos(0, self.y), "GOING BACK TO BASE WITH ORE")
+        self.move(Pos(0, self.y), "BACK")
 
     def move(self, pos, message=""):
         self.action = f"MOVE {pos.x} {pos.y} {message} ({self.id})"
@@ -134,6 +140,12 @@ class Game:
         self.suspicious_enemies = {}
         self.previous_turn_enemies = {}
         self.suspicious_pos = []
+        self.waiting_robots = []
+        self.enemies_trapped = 0
+        self.trap_enabled = True
+        self.round = 0
+        self.total_diggable_amadesium = 0
+        self.radar_enabled = True
 
     def reset(self):
         self.radars = []
@@ -143,7 +155,9 @@ class Game:
         self.to_dig = []
         self.grid.init_radars()
         self.grid.holes = []
-
+        self.enemies_trapped = 0
+        self.total_diggable_amadesium = 0
+        self.radar_enabled = True
 
 game = Game()
 
@@ -152,6 +166,7 @@ while True:
     # my_score: Players score
     game.my_score, game.enemy_score = [int(i) for i in input().split()]
     game.reset()
+    game.round += 1
     for i in range(height):
         inputs = input().split()
         for j in range(width):
@@ -173,13 +188,14 @@ while True:
     for i in range(entity_count):
         # id: unique id of the entity
         # x,y: position of the entity
-        # item: if this entity is a robot, the item it is carrying (-1 for NONE, 2 for RADAR, 3 for TRAP, 4 for AMADEUSIUM)
         id, type, x, y, item = [int(j) for j in input().split()]
 
         if type == ROBOT_ALLY:
             game.my_robots.append(Robot(x, y, type, id, item))
         elif type == ROBOT_ENEMY:
             game.enemy_robots.append(Robot(x, y, type, id, item))
+            if x == -1 and y == -1:
+                game.enemies_trapped += 1
         elif type == TRAP:
             game.traps.append(Entity(x, y, type, id))
             for pos in game.suspicious_pos:
@@ -191,7 +207,14 @@ while True:
             game.radars.append(Entity(x, y, type, id))
             game.grid.update_radars(Pos(x, y))
 
-    print(f"{len(game.to_dig)} to dig", file=sys.stderr)
+    # Stop luring enemies or adding trap if not efficient
+    if game.round > MAX_ROUND_FOR_TRAPS_IF_NOT_TRAPPED:
+        game.trap_enabled = False
+    else:
+        game.trap_enabled = False if len(game.traps) > MAX_ACTIVE_TRAPS else True
+
+
+
     radar_requested = False
     best_candidate_for_radar = None
     best_candidate_for_trap = None
@@ -226,11 +249,6 @@ while True:
 
         game.previous_turn_enemies[robot.id] = robot
 
-    enemies_string = ','.join(str(r.id) for i, r in game.suspicious_enemies.items())
-    print(f"{len(game.suspicious_enemies)} suspicious_enemies {enemies_string}", file=sys.stderr)
-    pos_string = ','.join(str(p.x) + ':' + str(p.y) for p in game.suspicious_pos)
-    print(f"{len(game.suspicious_pos)} suspicious_pos {pos_string}", file=sys.stderr)
-
     # Remove suspicious position from the to_dig list
     clean_to_dig = []
     for i, pos in enumerate(game.to_dig):
@@ -241,10 +259,23 @@ while True:
             clean_to_dig.append(pos)
     previous_to_dig_count = len(game.to_dig)
     game.to_dig = clean_to_dig
+
+    # Stop setting radar if enough ore to dig in non suspicious cells
+    for cell in clean_to_dig:
+        game.total_diggable_amadesium += cell.amadeusium
+    if game.total_diggable_amadesium > MAX_ORE_TO_SET_RADARS:
+        game.radar_enabled = False
+
+    print(f"traps enabled ? {game.trap_enabled} ({len(game.traps)})", file=sys.stderr)
+    print(f"radar enabled ? {game.radar_enabled} ({game.total_diggable_amadesium})", file=sys.stderr)
+    print(f"{previous_to_dig_count} to dig", file=sys.stderr)
     print(f"{previous_to_dig_count - len(game.to_dig)} to dig cleaned", file=sys.stderr)
+    print(f"{len(game.suspicious_enemies)} suspicious_enemies : {','.join(str(r.id) for i, r in game.suspicious_enemies.items())}", file=sys.stderr)
+    print(f"{len(game.suspicious_pos)} suspicious_pos : {','.join(str(p.x) + ':' + str(p.y) for p in game.suspicious_pos)}", file=sys.stderr)
+    print(f"{len(game.waiting_robots)} waiting robots : {','.join(str(robot_id) for robot_id in game.waiting_robots)}", file=sys.stderr)
 
     # Find a place to set trap efficiently
-    if len(game.to_dig) > MIN_TO_DIG_TO_SET_TRAPS:
+    if game.trap_enabled and len(game.to_dig) > MIN_TO_DIG_TO_SET_TRAPS:
         for robot in game.my_robots:
             if robot.item in [-1, 4]:
                 distance = Pos(0, robot.y).distance(robot)
@@ -255,7 +286,7 @@ while True:
     # Loop my robot to find priorities first
     for robot in game.my_robots:
         # Do we need a radar
-        if len(game.grid.places_for_radar) and not game.radar_cooldown:
+        if game.radar_enabled and len(game.grid.places_for_radar) and not game.radar_cooldown:
             # Find the best candidate to pick the radar (closest to base)
             if robot.item in [-1, 4]:
                 distance = robot.x + Pos(0, robot.y).distance(next_radar)
@@ -283,19 +314,30 @@ while True:
         elif robot.item == 4:
             robot.go_back_to_base()
         elif robot.item == 2 and next_radar:
+            # TODO be carefull of suspicious cells, maybe try just on the side
             robot.dig(next_radar, "PLACING RADAR")
         else:
-            # TODO sometimes pause to make the enemy believe we set a trap (ideally for "big" ore)
             if len(game.to_dig):
                 min_distance_for_radar = 50
                 best_cell = game.to_dig[0]
                 to_delete = 0
                 for i, cell in enumerate(game.to_dig):
-                    distance = robot.distance(cell) + cell.x
-                    if distance < min_distance_for_radar:
-                        best_cell = cell
-                        min_distance_for_radar = distance
-                        to_delete = i
+                    if robot.item != 3 or robot.item == 3 and cell.amadeusium > 1:
+                        distance = robot.distance(cell) + cell.x
+                        if distance < min_distance_for_radar:
+                            best_cell = cell
+                            min_distance_for_radar = distance
+                            to_delete = i
+                # Maybe wait one turn to lure enemy into believing it will put a trap
+                waiting_to_lure_enemy = False
+                if best_cell.amadeusium == 3:
+                    if robot.x == 0:
+                        if robot.id not in game.waiting_robots:
+                            waiting_to_lure_enemy = True
+                            game.waiting_robots.append(robot.id)
+                        else:
+                            game.waiting_robots.remove(robot.id)
+
                 # Remove cell from available if this robot depleted it (maybe with others)
                 already_reserved_cells.append(best_cell)
                 number_of_reservation = 0
@@ -304,10 +346,25 @@ while True:
                         number_of_reservation += 1
                 if number_of_reservation >= best_cell.amadeusium:
                     del game.to_dig[to_delete]
-                robot.dig(best_cell)
+                if waiting_to_lure_enemy:
+                    robot.wait("LURE ENEMY")
+                else:
+                    robot.dig(best_cell, "DIGGING")
             elif someone_has_a_radar and following_radar < MAX_FOLLOWING_RADAR:
                 robot.move(next_radar)
                 following_radar += 1
             else:
-                # TODO find a better thing to do
-                robot.wait(f"Nothing better to do")
+                # If nothing particular to do, try to advance on the same row at random
+                if not game.grid.holes:
+                    robot.dig(Pos(STARTING_GUESS_COLUMN, robot.y), "RANDOM")
+                else:
+                    for column in range(STARTING_GUESS_COLUMN, width - 1):
+                        cell_to_check = game.grid.get_cell(column, min(max(robot.y, 1), 13))
+                        for hole in game.grid.holes:
+                            if cell_to_check.same(hole):
+                                break
+                        else:
+                            robot.dig(cell_to_check, "RANDOM")
+                            break
+                    else:
+                        robot.wait(f"Nothing better to do")
