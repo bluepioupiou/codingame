@@ -15,7 +15,7 @@ AMADEUSIUM = 4
 
 TRY_TO_BREAK_RADARS = False
 TRY_TO_SIMULATE_TRAPS = False
-MANUAL_STEPS = False
+MANUAL_STEPS = True
 MAX_REACHABLE_DISTANCE = 4
 FIRST_PLACES_FOR_RADARS = [[7, 7], [11, 3], [11, 11], [15, 7], [19, 3], [19, 11], [3, 3], [3, 11], [23, 7], [27, 3], [27, 11]]
 SECOND_PLACES_FOR_RADARS = [[7, 0], [15, 0], [23, 0], [7, 14], [15, 14], [23, 14]]
@@ -100,7 +100,7 @@ class Robot(Entity):
         if self.distance(target) <= 1:
             print(f"DIG {target.x} {target.y} {message} ({self.id})")
         else:
-            self.move(target, grid, enemies, my_traps, message, force)
+            self.move(Pos(target.x - 1, target.y), grid, enemies, my_traps, message, force)
 
     def request(self, requested_item, grid, enemies, my_traps, message=""):
         if self.x > 0:
@@ -120,6 +120,8 @@ class Cell(Pos):
         self.amadeusium = int(amadeusium) if amadeusium != '?' else 0
         self.hole = hole
         self.suspicious = False
+        self.enemy = False
+        self.trap = False
 
     def has_hole(self):
         return self.hole == HOLE
@@ -130,6 +132,8 @@ class Cell(Pos):
     def update(self, amadeusium, hole):
         self.amadeusium = int(amadeusium) if amadeusium != '?' else 0
         self.hole = hole
+        self.enemy = False
+        self.trap = False
 
 
 class Grid:
@@ -159,17 +163,13 @@ class Grid:
 
     def update_radars(self, radar):
         for i, o in enumerate(self.first_places_for_availale_radar):
-            for diff in NEIGHBORS:
-                new_x = o.x + diff[0]
-                new_y = o.y + diff[1]
-                if new_x == radar.x and new_y == radar.y:
+            for check_cell in self.get_cells_between_distances(o, 0, 1):
+                if check_cell.same(radar):
                     del self.first_places_for_availale_radar[i]
                     break
         for i, o in enumerate(self.second_places_for_availale_radar):
-            for diff in NEIGHBORS:
-                new_x = o.x + diff[0]
-                new_y = o.y + diff[1]
-                if new_x == radar.x and new_y == radar.y:
+            for check_cell in self.get_cells_between_distances(o, 0, 1):
+                if check_cell.same(radar):
                     del self.second_places_for_availale_radar[i]
                     break
 
@@ -206,10 +206,8 @@ class Grid:
         max_range = max_distance + 1
         for x in range(min_range, max_range):
             for y in range(min_range, max_range):
-                print(f"{cell.x + x}/{cell.y + y}", file=sys.stderr)
                 if min_distance <= abs(x) + abs(y) <= max_distance and 0 <= cell.x + x < width and 0 <= cell.y + y < height:
                     corresponding_cell = self.get_cell(cell.x + x, cell.y + y)
-                    print(f"{cell.x+x}/{cell.y+y} ok", file=sys.stderr)
                     if corresponding_cell:
                         corresponding_cells.append(corresponding_cell)
         return corresponding_cells
@@ -305,8 +303,11 @@ while True:
             if robot.is_dead() and robot.id in game.trying_suspicious_cells:
                 game.enemy_is_trapping = True
         elif type == ROBOT_ENEMY:
-            game.enemy_robots.append(Robot(x, y, type, id, item))
-            if x == -1 and y == -1:
+            robot = Robot(x, y, type, id, item)
+            game.enemy_robots.append(robot)
+            if not robot.is_dead():
+                game.grid.get_cell(x, y).enemy = True
+            else:
                 game.enemies_trapped += 1
         elif type == TRAP:
             game.traps.append(Entity(x, y, type, id))
@@ -314,8 +315,6 @@ while True:
         elif type == RADAR:
             game.radars.append(Entity(x, y, type, id))
             game.grid.update_radars(Pos(x, y))
-        else:
-            game.grid.get_cell(x, y).trap = False
 
 
 
@@ -341,16 +340,12 @@ while True:
                 # Robot is on QG : it may have a radar or a trap
                 if robot.x == 0:
                     game.suspicious_enemies[robot.id] = robot
-                else:
-                    # Robot potentially release a trap somewhere
-                    if robot.id in game.suspicious_enemies:
-                        # Match for all accessible holes and mark them
-                        for diff in NEIGHBORS:
-                            new_x = robot.x + diff[0]
-                            new_y = robot.y + diff[1]
-                            cell_to_check = game.grid.get_cell(new_x, new_y)
-                            if cell_to_check and cell_to_check.has_hole():
-                                game.grid.get_cell(cell_to_check.x, cell_to_check.y).suspicious = True
+                # Robot potentially release a trap somewhere
+                if robot.id in game.suspicious_enemies:
+                    # Match for all accessible holes and mark them
+                    for cell_to_check in game.grid.get_cells_between_distances(robot, 0, 1):
+                        if cell_to_check and cell_to_check.has_hole():
+                            game.grid.get_cell(cell_to_check.x, cell_to_check.y).suspicious = True
             elif robot.x == 0 and robot.id in game.suspicious_enemies:
                 del game.suspicious_enemies[robot.id]
 
