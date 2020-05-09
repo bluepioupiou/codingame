@@ -25,19 +25,30 @@ class Path:
 
 
 class PacMan:
-    def __init__(self, id, x, y, speed_turns_left, ability_cooldown):
+    TYPE_ROCK = "ROCK"
+    TYPE_PAPER = "TYPE_PAPER"
+    TYPE_SCISSORS = "SCISSORS"
+
+    def __init__(self, id, x, y, mine, type_id, speed_turns_left, ability_cooldown):
         self.id = id
         self.x = x
         self.y = y
+        self.mine = mine
+        self.type_id = type_id
+        self.speed_turns_left = speed_turns_left
+        self.ability_cooldown = ability_cooldown
 
     def __str__(self):
         return "{0}:{1}".format(self.x, self.y)
 
     def __eq__(self, other):
-        return self.x == other.x and self.y == other.y
+        return self.id == other.id
 
     def isOnTile(self, tile):
         return self.x == tile.x and self.y == tile.y
+
+    def canEat(self, other):
+        return (self.type_id == self.TYPE_ROCK and other.type_id == self.TYPE_SCISSORS) or (self.type_id == self.TYPE_PAPER and other.type_id == self.TYPE_ROCK) or (self.type_id == self.TYPE_SCISSORS and other.type_id == self.TYPE_PAPER)
 
 
 class Tile:
@@ -59,14 +70,12 @@ class Board:
         self.height = height
         self.rows = [[0] * width for i in range(height)]
 
-    def __str__(self):
+    def print(self):
         for row in self.rows:
-            print("".join([str(car) for car in row]), file=sys.stderr)
+            print("".join(["X" if car == 10 else "-" if car == 0 else "+" if car == 1 else " "
+                           for car in row]), file=sys.stderr)
 
     def setTile(self, x, y, value):
-        # print("width {0} height {1}".format(
-        #    self.width, self.height), file=sys.stderr)
-        # print("set tile {0} {1}".format(x, y), file=sys.stderr)
         self.rows[y][x] = value
 
     def getTile(self, x, y):
@@ -105,8 +114,6 @@ class Board:
         path = Path(self.getTile(pacman.x, pacman.y))
         paths = [path]
         self.calculatePossiblePaths(paths, path)
-        # for path in paths:
-        #    print(path, file=sys.stderr)
         return paths
 
     def calculatePossiblePaths(self, paths, path):
@@ -127,32 +134,67 @@ class Board:
 class Game:
     def __init__(self, width, height):
         self.myPacMen = []
+        self.powerPacMen = []
         self.enemyPacMen = []
         self.commands = []
         self.board = Board(width, height)
 
     def reset(self):
         self.myPacMen = []
+        self.powerPacMen = []
         self.enemyPacMen = []
         self.commands = []
 
-    def isPacManTile(self, tile, myPacMan):
+    def movePacMen(self):
+        for pacMan in self.myPacMen:
+            if pacMan not in self.powerPacMen:
+                self.addBestMove(pacMan)
+
+    def resolvePowers(self):
+        for pacMan in self.myPacMen:
+            if not pacMan.ability_cooldown:
+                self.speedCommand(pacMan)
+                self.powerPacMen.append(pacMan)
+
+    def haveToAvoidTile(self, tile, myPacMan):
+        # TODO : ne faire attention que si PacMan dangereux et virer les miens si on traite les changements de board
         for pacMan in self.enemyPacMen + self.myPacMen:
             if myPacMan == pacMan:
                 return False
             if pacMan.isOnTile(tile):
+                if pacMan.mine:
+                    return True
+
+                if myPacMan.canEat(pacMan):
+                    print("{0} can eat {1}".format(
+                        myPacMan.id, pacMan.id), file=sys.stderr)
+                    return False
                 return True
+
+            if pacMan.mine:
+                return False
+
             neightbours = self.board.getNeighbours(tile)
             for neightbour in neightbours:
                 if pacMan.isOnTile(neightbour):
-                    return True
+                    if myPacMan.canEat(pacMan):
+                        print("{0} could eat {1}".format(
+                            myPacMan.id, pacMan.id), file=sys.stderr)
+                        return False
+
+                    if pacMan.canEat(myPacMan):
+                        print("{0} could be eaten by {1}".format(
+                            myPacMan.id, pacMan.id), file=sys.stderr)
+                        return True
+
+                    return False
         return False
 
     def addBestMove(self, pacman):
         paths = self.board.findBestPaths(pacman)
         # Vire les chemins ou on rencontre un autre pacman
         paths = list(
-            filter(lambda path: len(path.tiles) == len(list(filter(lambda tile: not self.isPacManTile(tile, pacman), path.tiles))), paths))
+            filter(lambda path: len(path.tiles) == len(list(filter(lambda tile: not self.haveToAvoidTile(tile, pacman), path.tiles))), paths))
 
         paths.sort(key=lambda x: x.value, reverse=True)
         sameValuePaths = list(
@@ -177,13 +219,20 @@ class Game:
             nextTile = self.board.findClosestPellet(pacman)
             message = "Je trouve rien, je vais au plus proche"
         else:
-            nextTile = chosenPath.tiles[1]
+            if pacman.speed_turns_left and len(chosenPath.tiles) > 2:
+                nextTile = chosenPath.tiles[2]
+            else:
+                nextTile = chosenPath.tiles[1]
 
         self.board.setTile(nextTile.x, nextTile.y, 0)
-        self.addCommand(self.moveCommand(pacman, nextTile, message))
+        self.moveCommand(pacman, nextTile, message)
 
     def moveCommand(self, pacman, tile, message):
-        return("MOVE {0} {1} {2} {3}".format(pacman.id, tile.x, tile.y, message))
+        self.addCommand(("MOVE {0} {1} {2} {3}".format(
+            pacman.id, tile.x, tile.y, message)))
+
+    def speedCommand(self, pacman):
+        self.addCommand(("SPEED {0}".format(pacman.id)))
 
     def addCommand(self, command):
         self.commands.append(command)
@@ -209,13 +258,6 @@ while True:
     my_score, opponent_score = [int(i) for i in input().split()]
     visible_pac_count = int(input())  # all your pacs and enemy pacs in sight
     for i in range(visible_pac_count):
-        # pac_id: pac number (unique within a team)
-        # mine: true if this pac is yours
-        # x: position in the grid
-        # y: position in the grid
-        # type_id: unused in wood leagues
-        # speed_turns_left: unused in wood leagues
-        # ability_cooldown: unused in wood leagues
         pac_id, mine, x, y, type_id, speed_turns_left, ability_cooldown = input().split()
         pac_id = int(pac_id)
         mine = mine != "0"
@@ -224,7 +266,8 @@ while True:
         speed_turns_left = int(speed_turns_left)
         ability_cooldown = int(ability_cooldown)
 
-        pacman = PacMan(pac_id, x, y, speed_turns_left, ability_cooldown)
+        pacman = PacMan(pac_id, x, y, mine, type_id,
+                        speed_turns_left, ability_cooldown)
         # TODO améliorer la MAJ de la board, ça marche pas
         game.board.setTile(x, y, 0)
         if mine:
@@ -234,15 +277,12 @@ while True:
 
     visible_pellet_count = int(input())  # all pellets in sight
     for i in range(visible_pellet_count):
-        # value: amount of points this pellet is worth
+
         x, y, value = [int(j) for j in input().split()]
         game.board.setTile(x, y, value)
+    # game.board.print()
 
-    # print(board)
-    # Write an action using print
-    # To debug: print("Debug messages...", file=sys.stderr)
-    # MOVE <pacId> <x> <y>
-    for pacman in game.myPacMen:
-        game.addBestMove(pacman)
-    # TODO : Utiliser l'acceleration
+    game.resolvePowers()
+    game.movePacMen()
+
     game.printCommands()
