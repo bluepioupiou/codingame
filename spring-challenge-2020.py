@@ -202,20 +202,24 @@ class Board:
     def getTile(self, x, y):
         return Tile(x, y, self.rows[y][x])
 
+    def getNeighboursTile(self, tile, neighbour):
+        new_x = tile.x + neighbour[0]
+        new_y = tile.y + neighbour[1]
+        if new_x == self.width:
+            new_x = 0
+        elif new_x < 0:
+            new_x = self.width - 1
+        if new_y == self.height:
+            new_y = 0
+        elif new_y < 0:
+            new_y = self.height - 1
+        new_tile = self.getTile(new_x, new_y)
+        return new_tile
+
     def getNeighbours(self, tile):
         neighbours = []
         for neighbour in NEIGHBOURS_DIRECTIONS:
-            new_x = tile.x + neighbour[0]
-            new_y = tile.y + neighbour[1]
-            if new_x == self.width:
-                new_x = 0
-            elif new_x < 0:
-                new_x = self.width - 1
-            if new_y == self.height:
-                new_y = 0
-            elif new_y < 0:
-                new_y = self.height - 1
-            new_tile = self.getTile(new_x, new_y)
+            new_tile = self.getNeighboursTile(tile, neighbour)
             if not new_tile.value == "#":
                 neighbours.append(new_tile)
         return neighbours
@@ -265,6 +269,24 @@ class Game:
         self.enemyPacMen = []
         self.commands = []
         self.board.resetXPellets()
+
+    def updateBoard(self, visible_pellets):
+        positions = []
+        removed = []
+
+        for (x, y, value) in visible_pellets:  # Mets à jour la map
+            game.board.setTile(x, y, value)
+            positions.append((x, y))
+        for pacman in self.myPacMen:  # Vire les pastilles que le pacman devrait voir mais qui ne sont pas dans les visibles
+            for neighbour in NEIGHBOURS_DIRECTIONS:
+                new_tile = self.board.getNeighboursTile(pacman, neighbour)
+                while new_tile.value != "#":
+                    # Tile que l'on voit pas dans les pastilles visible, donc = 0
+                    if not (new_tile.x, new_tile.y) in positions:
+                        self.board.setTile(new_tile.x, new_tile.y, 0)
+                        removed.append((new_tile.x, new_tile.y))
+                    new_tile = self.board.getNeighboursTile(
+                        new_tile, neighbour)
 
     def movePacMen(self):
         self.simulatedBoard = copy.deepcopy(self.board)
@@ -386,9 +408,14 @@ while True:
     MAX_PATH_LENGTH = STARTING_MAX_PATH_LENGTH - len(game.myPacMen)
 
     visible_pellet_count = int(input())  # all pellets in sight
+    visible_pellets = []
     for i in range(visible_pellet_count):
         x, y, value = [int(j) for j in input().split()]
-        game.board.setTile(x, y, value)
+        visible_pellets.append((x, y, value))
+    game.updateBoard(visible_pellets)
     # game.board.print()
     game.movePacMen()
     game.printCommands()
+
+# TODO : calculer ou j'en suis du temps et l'utiliser au mieux
+# TODO : prendre en compte les pac morts
