@@ -1,6 +1,7 @@
 import sys
 import math
 import copy
+from collections import deque, Counter
 import time
 
 # Rajouter le calcul des éléments restants
@@ -22,7 +23,7 @@ LVL_1_VALUE = 2
 LVL_2_VALUE = 3
 LVL_3_VALUE = 4
 
-NUMBER_OF_STEPS_FOR_VISION = 10
+MAX_NUMBER_OF_STEPS_FOR_VISION = 5
 TIME_TO_PASS_SEARCHING_VISIONS = 0.035
 
 def print_console(message):
@@ -45,6 +46,9 @@ class Game:
     self.my_stock = my_stock
     self.recipes = recipes
     self.spells = spells
+    self.spells_dict = {}
+    for spell in spells:
+      self.spells_dict[spell.id] = spell
     self.tomes = tomes
     self.recipes.sort(key=lambda recipe: recipe.value, reverse=True)
     self.brewable_recipes = [recipe for recipe in self.recipes if  self.my_stock.can_brew(recipe)]
@@ -67,73 +71,43 @@ class Game:
   def rest(self):
     print(f"{ACTION_TYPE_REST}")
 
-  def find_critical_spell_path(self, recipe):
-    visions = []
-    spells = copy.deepcopy(self.spells)
-    stock = copy.deepcopy(self.my_stock)
-    vision = Vision(stock, spells)
-    visions.append(vision)
-    successful_vision = None
+  def find_critical_spell_path(self, recipes):
+    vision = Vision(self.my_stock)
+    visions = deque([vision])
+    successful_visions = []
+    found_stocks = []
+    spells = [(spell.id, spell.get_tuple()) for spell in self.spells]
+    found_recipes = []
     # TODO Virer les visions qui ne donnent plus sur rien
-    for i in range(NUMBER_OF_STEPS_FOR_VISION):
-      #print_console("itération {}, number of visions: {}".format(i, len(visions)))
-      new_visions = []
-      for vision in visions:
-        #if i == 7: 
-          #print_console("vision {}".format(vision))
-        for spell in vision.spells:
-          ongoing_vision = copy.deepcopy(vision)
-          #print_console(" - spell {}".format(spell))
-          if ongoing_vision.stock.could_cast(spell):
-            if spell.castable:
-              ongoing_vision.cast(spell)
-              if vision.stock.can_brew(recipe):
-                successful_vision = vision
-                break
-            else:
-              #print_console("need to rest to launch this spell")
-              ongoing_vision.rest()
-
-            # On reparcours les visions d'avant pour voir si on arrive au meme point dans le stock
-            #print_console("check vision {}".format(ongoing_vision))
-            for l, inspect_vision in enumerate(new_visions): 
-              if ongoing_vision.stock == inspect_vision.stock:
-                # TODO Améliorer l'algorithme de choix de la vision à garder
-                if ongoing_vision.count_castable_spells() > inspect_vision.count_castable_spells():
-                  #print_console("disband previous vision {} {}".format(l, inspect_vision))
-                  new_visions.pop(l)
-                #else:
-                  #print_console("dont add new vision")
-                break
-            else: 
-              #print_console("didnt found conflict, adding")
-              new_visions.append(ongoing_vision)
-        else:
-          continue
-        break
-      else:
-        visions = new_visions
-        #print_console("time elapsed {}".format(time.time() - self.start))
-        if time.time() - self.start > TIME_TO_PASS_SEARCHING_VISIONS:
-            break
-        continue
-      break
-
-    return successful_vision
+    while len(visions) and len(successful_visions) <5 and time.time() - self.start < TIME_TO_PASS_SEARCHING_VISIONS:
+      vision = visions.popleft()
+      for spell_id, spell in spells:
+        ongoing_vision = copy.deepcopy(vision)
+        expected_stock = tuple([sum(x) for x in zip(ongoing_vision.stock, spell)])
+        if all([a >= 0 for a in list(expected_stock)]) and sum(list(expected_stock)) <= 10:
+          ongoing_vision.stock = expected_stock
+          ongoing_vision.casted_spells.append(spell_id)
+          for recipe in recipes:
+            if recipe.id not in found_recipes and all([(a >= abs(b)) for a, b in zip(ongoing_vision.stock,recipe.get_tuple())]):
+                recipe.vision = ongoing_vision
+                found_recipes.append(recipe.id)
+                successful_visions.append(ongoing_vision)
+          if not ongoing_vision.stock in found_stocks and len(ongoing_vision.casted_spells) < MAX_NUMBER_OF_STEPS_FOR_VISION:
+            visions.append(ongoing_vision)
+            found_stocks.append(ongoing_vision.stock)
+    
+    return successful_visions
 
   def play_best_action(self):
     # Find critical path for each recipe
-    successful_vision_found = False
-    for recipe in self.recipes:
-      vision = self.find_critical_spell_path(recipe)
-      if vision:
-        #print_console("recipe {} = vision {}".format(recipe, vision))
-        successful_vision_found = True
-        recipe.set_successful_vision(vision)
+    self.find_critical_spell_path(self.recipes)
+    for recipe in recipes:  
+      if recipe.vision:
+        recipe.value += MAX_NUMBER_OF_STEPS_FOR_VISION  * 2 - len(recipe.vision.casted_spells) - max(Counter(recipe.vision.casted_spells).values()) + 1
       else:
-        #print_console("no successful vision for recipe {}".format(recipe))
         recipe.value = 0
-    
+
+    # TODO peut être a enlever plus tard pour faire entièrement confiance aux visions et tenter la recette presque atteinte mais plus intéressante
     if len(self.brewable_recipes):
       print_console("Je peux faire une potion, je fais la meilleure")
       self.brewable_recipes.sort(key=lambda recipe: recipe.value, reverse=True)
@@ -150,52 +124,39 @@ class Game:
           self.cast(tier_0_generators[0])
         else:
           self.rest()
-    elif successful_vision_found:
+    elif len([recipe for recipe in self.recipes if recipe.value]):
       self.recipes.sort(key=lambda recipe: recipe.value, reverse=True)
       best_recipe = self.recipes[0]
-      first_action = best_recipe.vision.actions[0]
-      print_console("vision {} for {}".format(best_recipe.vision, best_recipe))
-      if first_action["type"] == ACTION_TYPE_CAST:
-        self.cast(first_action["spell"])
+      print_console("best vision {} for {}".format(best_recipe.vision, best_recipe))
+      for spell_id in best_recipe.vision.casted_spells:
+        spell = self.spells_dict[spell_id]
+        if self.my_stock.can_cast(spell):
+          self.cast(spell)
+          break
       else:
         self.rest()
     else:
-      print_console("no more spell to cast at all")
-      self.rest()
+      print_console("no more spell to cast at all, beter to learn")
+      # TODO Améliorer pour apprendre le sort le plus intéressant pour mon deck
+      self.learn(self.tomes[0])
     print_console("total time elapsed {}".format(time.time() - self.start))
 
 class Vision:
-  def __init__(self, stock, spells):
-    self.stock = stock
-    self.spells = spells
+  def __init__(self, stock):
+    self.stock = stock.get_tuple()
     self.iterations = 0
-    self.actions = []
+    self.casted_spells = []
 
   def __str__(self):
-    return "{}(en {}) stock {}".format("->".join([str(action["spell"].id) if action["type"] == ACTION_TYPE_CAST else "R" for action in self.actions]), self.iterations, self.stock)
-
-  def __eq__(self, other):
-    return self.actions == other.actions
-
-  def count_castable_spells(self):
-    return len([spell.id for spell in self.spells if spell.castable])
+    return "{}(en {}) stock {}".format("->".join([str(spell_id) for spell_id in self.casted_spells]), len(self.casted_spells), self.stock)
 
   def cast(self, spell):
     self.stock.inv_0 += spell.delta_0
     self.stock.inv_1 += spell.delta_1
     self.stock.inv_2 += spell.delta_2
     self.stock.inv_3 += spell.delta_3
-    for my_spell in self.spells:
-      if spell.id == my_spell.id:
-        my_spell.castable = False
     self.iterations += 1
-    self.actions.append({"type": ACTION_TYPE_CAST, "spell": spell})
-
-  def rest(self):
-    for spell in self.spells:
-      spell.castable = True
-    self.iterations += 1
-    self.actions.append({"type": ACTION_TYPE_REST})
+    self.casted_spells.append(spell)
 
 class Stock:
   def __init__(self, inv_0, inv_1, inv_2, inv_3):
@@ -209,6 +170,9 @@ class Stock:
 
   def __eq__(self, other):
     return self.inv_0 == other.inv_0 and self.inv_1 == other.inv_1 and self.inv_2 == other.inv_2 and self.inv_3 == other.inv_3
+
+  def get_tuple(self):
+    return (self.inv_0, self.inv_1, self.inv_2, self.inv_3)
 
   def available_space(self):
     return 10 - self.inv_0 - self.inv_1 - self.inv_2 - self.inv_3
@@ -248,6 +212,9 @@ class Magic:
         return True
       return False
 
+  def get_tuple(self):
+    return (self.delta_0, self.delta_1, self.delta_2, self.delta_3)
+
   def place_needed(self):
     return self.delta_0 + self.delta_1 + self.delta_2 + self.delta_3
 
@@ -259,6 +226,7 @@ class Recipe(Magic):
     super().__init__(id, delta_0, delta_1, delta_2, delta_3)
     self.price = price
     self.value = self.price * 10 / abs(self.total_delta)
+    self.vision = None
 
   def __str__(self):
     return "{} {}-> {}".format(super().__str__(), self.price, self.value)
